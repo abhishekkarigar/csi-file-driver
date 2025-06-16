@@ -4,7 +4,7 @@ metadata:
   name: csi-fs-provisioner-role
 rules:
   - apiGroups: [""]
-    resources: ["persistentvolumeclaims", "persistentvolumes", "nodes"]
+    resources: ["persistentvolumeclaims", "persistentvolumes", "nodes","events"]
     verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
 
   - apiGroups: ["storage.k8s.io"]

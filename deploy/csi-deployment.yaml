@@ -46,7 +46,9 @@ spec:
 
       volumes:
         - name: socket-dir
-          emptyDir: {}
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.fs.local
+            type: DirectoryOrCreate
         - name: data-dir
           hostPath:
             path: /mnt/data
