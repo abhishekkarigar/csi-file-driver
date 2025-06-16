@@ -12,6 +12,7 @@ spec:
       labels:
         app: csi-fs-plugin
     spec:
+      nodeName: tierra
       serviceAccountName: csi-fs-controller-sa
       containers:
         - name: csi-driver

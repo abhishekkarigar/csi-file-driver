@@ -3,6 +3,7 @@ kind: Pod
 metadata:
   name: test-pod
 spec:
+  nodeName: tierra
   containers:
     - name: app
       image: busybox
