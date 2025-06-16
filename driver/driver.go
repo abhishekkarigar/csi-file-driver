@@ -3,12 +3,14 @@ package driver
 import (
 	"context"
 	"fmt"
-	"net"
-	"os"
-
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"net"
+	"os"
 )
 
 // FSDriver is the main struct that holds driver-level config
@@ -167,8 +169,14 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		return nil, fmt.Errorf("failed to create target path %s: %v", target, err)
 	}
 
-	if err := os.Symlink(src, target); err != nil && !os.IsExist(err) {
-		return nil, fmt.Errorf("failed to mount (symlink) %s -> %s: %v", src, target, err)
+	// Ensure src exists
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		return nil, status.Errorf(codes.NotFound, "source path %s does not exist", src)
+	}
+
+	// Bind mount (preferred over symlink)
+	if err := unix.Mount(src, target, "", unix.MS_BIND, ""); err != nil {
+		return nil, status.Errorf(codes.Internal, "bind mount failed: %v", err)
 	}
 
 	logrus.Infof("Mounted %s to %s", src, target)
