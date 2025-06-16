@@ -1,35 +1,70 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: csi-fs
+  name: csi-fs-plugin
   namespace: kube-system
 spec:
   selector:
     matchLabels:
-      app: csi-fs
+      app: csi-fs-plugin
   template:
     metadata:
       labels:
-        app: csi-fs
+        app: csi-fs-plugin
     spec:
       containers:
-        - name: csi-fs
+        - name: csi-driver
           image: karigar/csi-fs-driver:latest
           args:
-            - /csi-fs-driver
+            - "--endpoint=/csi/csi.sock"
           volumeMounts:
-            - mountPath: /var/lib/kubelet/plugins
-              name: plugin-dir
-            - mountPath: /mnt/data
-              name: data-dir
+            - name: plugin-dir
+              mountPath: /csi
+            - name: mountpoint-dir
+              mountPath: /var/lib/kubelet
+            - name: data-dir
+              mountPath: /mnt/data
+          securityContext:
+            privileged: true
+
+        - name: csi-provisioner
+          image: registry.k8s.io/sig-storage/csi-provisioner:v3.6.0
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--v=5"
+            - "--feature-gates=Topology=true"
+            - "--timeout=60s"
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+
+        - name: node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.9.0
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--kubelet-registration-path=/var/lib/kubelet/plugins/csi.fs.local/csi.sock"
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+
       volumes:
         - name: plugin-dir
           hostPath:
-            path: /var/lib/kubelet/plugins
+            path: /var/lib/kubelet/plugins/csi.fs.local
             type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: mountpoint-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
         - name: data-dir
           hostPath:
             path: /mnt/data
             type: DirectoryOrCreate
-      #hostNetwork: true
-      #dnsPolicy: ClusterFirstWithHostNet
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet

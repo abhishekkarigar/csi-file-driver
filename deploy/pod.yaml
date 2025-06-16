@@ -1,19 +1,16 @@
-# deploy/pod.yaml
 apiVersion: v1
 kind: Pod
 metadata:
   name: test-pod
 spec:
-  nodeName: tierra
   containers:
     - name: app
       image: busybox
-      command: ["/bin/sh", "-c"]
-      args: ["echo hello > /data/test.txt && sleep 3600"]
+      command: ["sleep", "3600"]
       volumeMounts:
-        - mountPath: /data
-          name: simple-volume
+        - name: test-vol
+          mountPath: /data
   volumes:
-    - name: simple-volume
+    - name: test-vol
       persistentVolumeClaim:
-        claimName: simple-pvc
+        claimName: test-pvc
