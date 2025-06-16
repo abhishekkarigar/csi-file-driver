@@ -4,3 +4,4 @@ metadata:
   name: fs-storage
 provisioner: csi.fs.local
 volumeBindingMode: Immediate
+reclaimPolicy: Delete

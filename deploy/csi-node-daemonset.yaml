@@ -12,6 +12,7 @@ spec:
       labels:
         app: csi-fs-plugin
     spec:
+      serviceAccountName: csi-fs-controller-sa
       containers:
         - name: csi-driver
           image: karigar/csi-fs-driver:latest
