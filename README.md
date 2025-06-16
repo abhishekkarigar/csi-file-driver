@@ -11,3 +11,13 @@
 #### kubectl apply -f pod.yaml
 
 
+# know how  
+
+
+#### mount --bind /mnt/staging/ebs-vol-123 /var/lib/kubelet/pods/<pod-id>/volumes/ebs-vol
+#### mount --bind /mnt/data/pvc-vol-123 /var/lib/kubelet/pods/fa77ae39-383c-4b6d-ad6e-7f0344d32955/volumes/kubernetes.io~csi/
+
+
+
+
+

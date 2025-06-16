@@ -101,6 +101,10 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, fmt.Errorf("failed to create volume directory: %v", err)
 	}
 
+	// volID is pvc-50e7a998-5559-447f-af1f-eba501ded56d
+	// volPath /mnt/data/pvc-50e7a998-5559-447f-af1f-eba501ded56d
+	// staging path is /mnt also called as mounting path or backing path
+	// bind-mount is when you mount  this staging path to the target path in pod.
 	logrus.Infof("Created volume %s at path %s", volID, volPath)
 
 	return &csi.CreateVolumeResponse{
@@ -195,6 +199,22 @@ func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 
 func (ns *nodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
 	return &csi.NodeGetCapabilitiesResponse{
-		Capabilities: []*csi.NodeServiceCapability{},
+		Capabilities: []*csi.NodeServiceCapability{
+			{
+				Type: &csi.NodeServiceCapability_Rpc{
+					Rpc: &csi.NodeServiceCapability_RPC{
+						Type: csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
+					},
+				},
+			},
+		},
 	}, nil
 }
+
+/*func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+
+}
+
+func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+
+}*/
