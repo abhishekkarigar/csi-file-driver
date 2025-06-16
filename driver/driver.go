@@ -165,16 +165,17 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	volID := req.GetVolumeId()
 	src := fmt.Sprintf("/mnt/data/%s", volID)
 
+	// Create the source path if it doesn't exist
 	if err := os.MkdirAll(src, 0755); err != nil {
-		return nil, status.Errorf(codes.NotFound, "failed to create target path %s", err)
+		return nil, status.Errorf(codes.Internal, "failed to create source path %s: %v", src, err)
 	}
 
-	// Ensure src exists
-	if _, err := os.Stat(src); os.IsNotExist(err) {
-		return nil, status.Errorf(codes.NotFound, "source path %s does not exist", src)
+	// Create the target path (where kubelet wants to mount)
+	if err := os.MkdirAll(target, 0755); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create target path %s: %v", target, err)
 	}
 
-	// Bind mount (preferred over symlink)
+	// Perform the bind mount
 	if err := unix.Mount(src, target, "", unix.MS_BIND, ""); err != nil {
 		return nil, status.Errorf(codes.Internal, "bind mount failed: %v", err)
 	}
