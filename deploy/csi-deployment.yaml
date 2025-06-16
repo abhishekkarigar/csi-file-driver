@@ -25,6 +25,8 @@ spec:
               mountPath: /csi
             - name: data-dir
               mountPath: /mnt/data
+            - name: plugin-dir
+              mountPath: /var/lib/kubelet/plugins/csi.fs.local
           securityContext:
             privileged: true
 
@@ -38,6 +40,9 @@ spec:
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
+            - name: plugin-dir
+              mountPath: /var/lib/kubelet/plugins/csi.fs.local
+
 
       volumes:
         - name: socket-dir
@@ -45,4 +50,8 @@ spec:
         - name: data-dir
           hostPath:
             path: /mnt/data
+            type: DirectoryOrCreate
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.fs.local
             type: DirectoryOrCreate
