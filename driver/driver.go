@@ -165,8 +165,8 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	volID := req.GetVolumeId()
 	src := fmt.Sprintf("/mnt/data/%s", volID)
 
-	if err := os.MkdirAll(target, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create target path %s: %v", target, err)
+	if err := os.MkdirAll(src, 0755); err != nil {
+		return nil, status.Errorf(codes.NotFound, "failed to create target path %s", err)
 	}
 
 	// Ensure src exists

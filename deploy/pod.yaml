@@ -7,7 +7,7 @@ spec:
   containers:
     - name: app
       image: busybox
-      command: ["sleep", "3600"]
+      command: ["/bin/sh", "-c", "echo 'Hello, World!' >> /data/hello.txt  && sleep 3600"]
       volumeMounts:
         - name: test-vol
           mountPath: /data
