@@ -213,6 +213,7 @@ func (ns *nodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetC
 }
 
 func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+	// Validate request parameters
 	if req.GetVolumeId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "Volume ID is required")
 	}
@@ -222,6 +223,7 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	if req.GetVolumeCapability() == nil {
 		return nil, status.Error(codes.InvalidArgument, "Volume capability is required")
 	}
+
 	volumeID := req.GetVolumeId()
 	stagingTargetPath := req.GetStagingTargetPath()
 	volumeCapability := req.GetVolumeCapability()
@@ -233,45 +235,61 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	if volumeCapability.GetMount() == nil {
 		return nil, status.Error(codes.InvalidArgument, "Mount capability required for filesystem volume")
 	}
+
 	// Get filesystem type and mount options
 	fsType := volumeCapability.GetMount().GetFsType()
 	if fsType == "" {
-		fsType = "nfs" // Default to NFS; adjust based on your storage backend
+		fsType = "bind" // Default to bind mount for local directories
 	}
-	if fsType != "nfs" {
-		return nil, status.Errorf(codes.InvalidArgument, "Unsupported fsType: %s, only 'nfs' is supported", fsType)
-	}
-
 	mountFlags := volumeCapability.GetMount().GetMountFlags()
-	// Add default NFS mount options if none provided
-	if len(mountFlags) == 0 {
-		mountFlags = []string{"vers=4,soft,timeo=600,retrans=2"}
+	if fsType == "bind" && len(mountFlags) == 0 {
+		mountFlags = []string{"bind"} // Required for bind mounts
 	}
 
-	// Get volume attributes (e.g., NFS server and path)
+	// Get the local directory path from publish_context
 	publishContext := req.GetPublishContext()
-	sourcePath, ok := publishContext["sourcePath"] // e.g., "nfs-server:/export" or Azure File share
+	sourcePath, ok := publishContext["sourcePath"] // e.g., "/data/volumes/<volume-id>"
 	if !ok {
 		logrus.Errorf("NodeStageVolume: sourcePath not found in publish_context for volume %s", volumeID)
 		return nil, status.Error(codes.InvalidArgument, "sourcePath not found in publish_context")
 	}
+
+	// Log request details for debugging
+	logrus.Infof("NodeStageVolume: volume_id=%s, staging_target_path=%s, fsType=%s, sourcePath=%s, mountFlags=%v",
+		volumeID, stagingTargetPath, fsType, sourcePath, mountFlags)
+
 	// Check if the staging path is already mounted
 	if isMounted(stagingTargetPath) {
 		logrus.Infof("NodeStageVolume: Volume %s already staged at %s", volumeID, stagingTargetPath)
-		return &csi.NodeStageVolumeResponse{}, nil // Idempotent: return success if already staged
+		return &csi.NodeStageVolumeResponse{}, nil // Idempotent
 	}
 
-	// Create the staging target path if it doesn't exist
+	// Ensure the source directory exists
+	if err := os.MkdirAll(sourcePath, 0755); err != nil {
+		logrus.Errorf("NodeStageVolume: Failed to create source path %s: %v", sourcePath, err)
+		return nil, status.Errorf(codes.Internal, "Failed to create source path %s: %v", sourcePath, err)
+	}
+
+	// Create the staging target path
 	if err := os.MkdirAll(stagingTargetPath, 0755); err != nil {
 		logrus.Errorf("NodeStageVolume: Failed to create staging path %s: %v", stagingTargetPath, err)
 		return nil, status.Errorf(codes.Internal, "Failed to create staging path %s: %v", stagingTargetPath, err)
 	}
 
-	// Mount the filesystem to the staging target path
-	logrus.Infof("NodeStageVolume: Mounting %s to %s (fsType: %s)", sourcePath, stagingTargetPath, fsType)
-	if err := mountFilesystem(sourcePath, stagingTargetPath, fsType, mountFlags); err != nil {
-		logrus.Errorf("NodeStageVolume: Failed to mount %s to %s: %v", sourcePath, stagingTargetPath, err)
-		return nil, status.Errorf(codes.Internal, "Failed to mount %s to %s: %v", sourcePath, stagingTargetPath, err)
+	// Mount the local directory to the staging path (if needed)
+	if fsType == "bind" {
+		logrus.Infof("NodeStageVolume: Bind-mounting %s to %s", sourcePath, stagingTargetPath)
+		if err := mountFilesystem(sourcePath, stagingTargetPath, fsType, mountFlags); err != nil {
+			logrus.Errorf("NodeStageVolume: Failed to bind-mount %s to %s: %v", sourcePath, stagingTargetPath, err)
+			return nil, status.Errorf(codes.Internal, "Failed to bind-mount %s to %s: %v", sourcePath, stagingTargetPath, err)
+		}
+	} else {
+		// For non-bind mounts (e.g., ext4 device), mount the filesystem
+		logrus.Infof("NodeStageVolume: Mounting %s to %s (fsType: %s)", sourcePath, stagingTargetPath, fsType)
+		if err := mountFilesystem(sourcePath, stagingTargetPath, fsType, mountFlags); err != nil {
+			logrus.Errorf("NodeStageVolume: Failed to mount %s to %s: %v", sourcePath, stagingTargetPath, err)
+			return nil, status.Errorf(codes.Internal, "Failed to mount %s to %s: %v", sourcePath, stagingTargetPath, err)
+		}
 	}
 
 	logrus.Infof("NodeStageVolume: Successfully staged volume %s to %s", volumeID, stagingTargetPath)
@@ -293,19 +311,19 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 	// Check if the staging path is mounted
 	if !isMounted(stagingTargetPath) {
 		logrus.Infof("NodeUnstageVolume: Volume %s is not mounted at %s, nothing to do", volumeID, stagingTargetPath)
-		return &csi.NodeUnstageVolumeResponse{}, nil // Idempotent: return success if not mounted
+		return &csi.NodeUnstageVolumeResponse{}, nil // Idempotent
 	}
 
-	// Unmount the filesystem from the staging path
+	// Unmount the filesystem
 	logrus.Infof("NodeUnstageVolume: Unmounting volume %s from %s", volumeID, stagingTargetPath)
 	if err := unmountFilesystem(stagingTargetPath); err != nil {
+		logrus.Errorf("NodeUnstageVolume: Failed to unmount %s: %v", stagingTargetPath, err)
 		return nil, status.Errorf(codes.Internal, "Failed to unmount %s: %v", stagingTargetPath, err)
 	}
 
-	// Optionally, remove the staging directory if empty
+	// Remove the staging directory if empty
 	if err := os.Remove(stagingTargetPath); err != nil && !os.IsNotExist(err) {
 		logrus.Warningf("NodeUnstageVolume: Failed to remove staging path %s: %v", stagingTargetPath, err)
-		// Not fatal; continue with success
 	}
 
 	logrus.Infof("NodeUnstageVolume: Successfully unstaged volume %s from %s", volumeID, stagingTargetPath)
@@ -323,13 +341,14 @@ func unmountFilesystem(targetPath string) error {
 
 // Helper functions
 func mountFilesystem(sourcePath, targetPath, fsType string, mountFlags []string) error {
-	args := []string{sourcePath, targetPath}
+	args := []string{}
 	if fsType != "" {
-		args = append([]string{"-t", fsType}, args...)
+		args = append(args, "-t", fsType)
 	}
 	if len(mountFlags) > 0 {
-		args = append([]string{"-o", mountFlags[0]}, args...)
+		args = append(args, "-o", mountFlags[0])
 	}
+	args = append(args, sourcePath, targetPath)
 	cmd := exec.Command("mount", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
