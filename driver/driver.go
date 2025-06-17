@@ -153,37 +153,12 @@ func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 
 // ControllerPublishVolume provides the local directory path for the volume.
 func (cs *controllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
-	// Validate request parameters
-	if req.GetVolumeId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "Volume ID is required")
-	}
-	if req.GetNodeId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "Node ID is required")
-	}
-	if req.GetVolumeCapability() == nil {
-		return nil, status.Error(codes.InvalidArgument, "Volume capability is required")
-	}
+	logrus.Infof("ControllerPublishVolume called with VolumeID=%s, NodeID=%s", req.VolumeId, req.NodeId)
 
-	volumeID := req.GetVolumeId()
-	nodeID := req.GetNodeId()
-
-	// Ensure the volume capability is for a filesystem
-	if req.GetVolumeCapability().GetBlock() != nil {
-		return nil, status.Error(codes.InvalidArgument, "Block volume not supported")
-	}
-	if req.GetVolumeCapability().GetMount() == nil {
-		return nil, status.Error(codes.InvalidArgument, "Mount capability required for filesystem volume")
-	}
-
-	// Construct the local directory path (adjust base path as needed)
-	sourcePath := fmt.Sprintf("/mnt/data/%s", volumeID) // e.g., /data/volumes/pvc-da6c30a9-ae8a-4aaa-81dc-09e47d31669b
-
-	logrus.Infof("ControllerPublishVolume: Volume %s assigned to node %s with sourcePath %s", volumeID, nodeID, sourcePath)
-
-	// Return the publish_context with sourcePath
+	// For file storage, there's often nothing to attach. But we can return metadata if needed.
 	return &csi.ControllerPublishVolumeResponse{
 		PublishContext: map[string]string{
-			"sourcePath": sourcePath,
+			"devicePath": fmt.Sprintf("/mnt/data/%s", req.VolumeId),
 		},
 	}, nil
 }
@@ -259,86 +234,28 @@ func (ns *nodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetC
 }
 
 func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
-	// Validate request parameters
-	if req.GetVolumeId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "Volume ID is required")
-	}
-	if req.GetStagingTargetPath() == "" {
-		return nil, status.Error(codes.InvalidArgument, "Staging target path is required")
-	}
-	if req.GetVolumeCapability() == nil {
-		return nil, status.Error(codes.InvalidArgument, "Volume capability is required")
-	}
-
 	volumeID := req.GetVolumeId()
-	stagingTargetPath := req.GetStagingTargetPath()
-	volumeCapability := req.GetVolumeCapability()
+	stagePath := req.GetStagingTargetPath()
 
-	// Ensure the volume capability is for a filesystem
-	if volumeCapability.GetBlock() != nil {
-		return nil, status.Error(codes.InvalidArgument, "Block volume not supported")
-	}
-	if volumeCapability.GetMount() == nil {
-		return nil, status.Error(codes.InvalidArgument, "Mount capability required for filesystem volume")
-	}
+	logrus.Infof("NodeStageVolume: volumeID=%s, stagingPath=%s", volumeID, stagePath)
 
-	// Get filesystem type and mount options
-	fsType := volumeCapability.GetMount().GetFsType()
-	if fsType == "" {
-		fsType = "bind" // Default to bind mount for local directories
-	}
-	mountFlags := volumeCapability.GetMount().GetMountFlags()
-	if fsType == "bind" && len(mountFlags) == 0 {
-		mountFlags = []string{"bind"} // Required for bind mounts
-	}
-
-	// Get the local directory path from publish_context
-	publishContext := req.GetPublishContext()
-	sourcePath, ok := publishContext["sourcePath"] // e.g., "/data/volumes/<volume-id>"
+	// Get source path from ControllerPublishVolume (e.g., from PublishContext)
+	src, ok := req.PublishContext["devicePath"]
 	if !ok {
-		logrus.Errorf("NodeStageVolume: sourcePath not found in publish_context for volume %s", volumeID)
-		return nil, status.Error(codes.InvalidArgument, "sourcePath not found in publish_context")
+		return nil, status.Error(codes.InvalidArgument, "devicePath missing in publish context")
 	}
 
-	// Log request details for debugging
-	logrus.Infof("NodeStageVolume: volume_id=%s, staging_target_path=%s, fsType=%s, sourcePath=%s, mountFlags=%v",
-		volumeID, stagingTargetPath, fsType, sourcePath, mountFlags)
-
-	// Check if the staging path is already mounted
-	if isMounted(stagingTargetPath) {
-		logrus.Infof("NodeStageVolume: Volume %s already staged at %s", volumeID, stagingTargetPath)
-		return &csi.NodeStageVolumeResponse{}, nil // Idempotent
+	// Create the staging target path if it doesn't exist
+	if err := os.MkdirAll(stagePath, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create stage path %s: %v", stagePath, err)
 	}
 
-	// Ensure the source directory exists
-	if err := os.MkdirAll(sourcePath, 0755); err != nil {
-		logrus.Errorf("NodeStageVolume: Failed to create source path %s: %v", sourcePath, err)
-		return nil, status.Errorf(codes.Internal, "Failed to create source path %s: %v", sourcePath, err)
+	// Mount the source to the staging target path (bind mount)
+	if err := unix.Mount(src, stagePath, "", unix.MS_BIND, ""); err != nil {
+		return nil, status.Errorf(codes.Internal, "bind mount failed: %v", err)
 	}
 
-	// Create the staging target path
-	if err := os.MkdirAll(stagingTargetPath, 0755); err != nil {
-		logrus.Errorf("NodeStageVolume: Failed to create staging path %s: %v", stagingTargetPath, err)
-		return nil, status.Errorf(codes.Internal, "Failed to create staging path %s: %v", stagingTargetPath, err)
-	}
-
-	// Mount the local directory to the staging path (if needed)
-	if fsType == "bind" {
-		logrus.Infof("NodeStageVolume: Bind-mounting %s to %s", sourcePath, stagingTargetPath)
-		if err := mountFilesystem(sourcePath, stagingTargetPath, fsType, mountFlags); err != nil {
-			logrus.Errorf("NodeStageVolume: Failed to bind-mount %s to %s: %v", sourcePath, stagingTargetPath, err)
-			return nil, status.Errorf(codes.Internal, "Failed to bind-mount %s to %s: %v", sourcePath, stagingTargetPath, err)
-		}
-	} else {
-		// For non-bind mounts (e.g., ext4 device), mount the filesystem
-		logrus.Infof("NodeStageVolume: Mounting %s to %s (fsType: %s)", sourcePath, stagingTargetPath, fsType)
-		if err := mountFilesystem(sourcePath, stagingTargetPath, fsType, mountFlags); err != nil {
-			logrus.Errorf("NodeStageVolume: Failed to mount %s to %s: %v", sourcePath, stagingTargetPath, err)
-			return nil, status.Errorf(codes.Internal, "Failed to mount %s to %s: %v", sourcePath, stagingTargetPath, err)
-		}
-	}
-
-	logrus.Infof("NodeStageVolume: Successfully staged volume %s to %s", volumeID, stagingTargetPath)
+	logrus.Infof("Successfully staged volume %s at %s", volumeID, stagePath)
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
