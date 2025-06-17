@@ -151,6 +151,52 @@ func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 	}, nil
 }
 
+// ControllerPublishVolume provides the local directory path for the volume.
+func (cs *controllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+	// Validate request parameters
+	if req.GetVolumeId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "Volume ID is required")
+	}
+	if req.GetNodeId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "Node ID is required")
+	}
+	if req.GetVolumeCapability() == nil {
+		return nil, status.Error(codes.InvalidArgument, "Volume capability is required")
+	}
+
+	volumeID := req.GetVolumeId()
+	nodeID := req.GetNodeId()
+
+	// Ensure the volume capability is for a filesystem
+	if req.GetVolumeCapability().GetBlock() != nil {
+		return nil, status.Error(codes.InvalidArgument, "Block volume not supported")
+	}
+	if req.GetVolumeCapability().GetMount() == nil {
+		return nil, status.Error(codes.InvalidArgument, "Mount capability required for filesystem volume")
+	}
+
+	// Construct the local directory path (adjust base path as needed)
+	sourcePath := fmt.Sprintf("/mnt/data/%s", volumeID) // e.g., /data/volumes/pvc-da6c30a9-ae8a-4aaa-81dc-09e47d31669b
+
+	logrus.Infof("ControllerPublishVolume: Volume %s assigned to node %s with sourcePath %s", volumeID, nodeID, sourcePath)
+
+	// Return the publish_context with sourcePath
+	return &csi.ControllerPublishVolumeResponse{
+		PublishContext: map[string]string{
+			"sourcePath": sourcePath,
+		},
+	}, nil
+}
+
+// ControllerUnpublishVolume (minimal implementation for cleanup)
+func (cs *controllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+	if req.GetVolumeId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "Volume ID is required")
+	}
+	logrus.Infof("ControllerUnpublishVolume: Volume %s unpublished", req.GetVolumeId())
+	return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Node Service
 
