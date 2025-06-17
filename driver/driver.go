@@ -238,14 +238,22 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	if fsType == "" {
 		fsType = "nfs" // Default to NFS; adjust based on your storage backend
 	}
+	if fsType != "nfs" {
+		return nil, status.Errorf(codes.InvalidArgument, "Unsupported fsType: %s, only 'nfs' is supported", fsType)
+	}
+
 	mountFlags := volumeCapability.GetMount().GetMountFlags()
+	// Add default NFS mount options if none provided
+	if len(mountFlags) == 0 {
+		mountFlags = []string{"vers=4,soft,timeo=600,retrans=2"}
+	}
 
 	// Get volume attributes (e.g., NFS server and path)
 	publishContext := req.GetPublishContext()
 	sourcePath, ok := publishContext["sourcePath"] // e.g., "nfs-server:/export" or Azure File share
 	if !ok {
-		logrus.Warningf("nodesource not found %s", sourcePath)
-		//return nil, status.Error(codes.InvalidArgument, "sourcePath attribute is required")
+		logrus.Errorf("NodeStageVolume: sourcePath not found in publish_context for volume %s", volumeID)
+		return nil, status.Error(codes.InvalidArgument, "sourcePath not found in publish_context")
 	}
 	// Check if the staging path is already mounted
 	if isMounted(stagingTargetPath) {
@@ -255,12 +263,14 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 
 	// Create the staging target path if it doesn't exist
 	if err := os.MkdirAll(stagingTargetPath, 0755); err != nil {
+		logrus.Errorf("NodeStageVolume: Failed to create staging path %s: %v", stagingTargetPath, err)
 		return nil, status.Errorf(codes.Internal, "Failed to create staging path %s: %v", stagingTargetPath, err)
 	}
 
 	// Mount the filesystem to the staging target path
 	logrus.Infof("NodeStageVolume: Mounting %s to %s (fsType: %s)", sourcePath, stagingTargetPath, fsType)
 	if err := mountFilesystem(sourcePath, stagingTargetPath, fsType, mountFlags); err != nil {
+		logrus.Errorf("NodeStageVolume: Failed to mount %s to %s: %v", sourcePath, stagingTargetPath, err)
 		return nil, status.Errorf(codes.Internal, "Failed to mount %s to %s: %v", sourcePath, stagingTargetPath, err)
 	}
 
