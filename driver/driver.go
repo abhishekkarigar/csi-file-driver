@@ -250,14 +250,26 @@ func (ns *nodeServer) NodeStageVolume(
 	devicePath := req.GetPublishContext()["devicePath"]
 	stagingTargetPath := req.GetStagingTargetPath()
 
+	if devicePath == "" {
+		return nil, status.Error(codes.InvalidArgument, "devicePath missing in publish context")
+	}
+
+	// Validate that devicePath exists
+	if stat, err := os.Stat(devicePath); err != nil || !stat.IsDir() {
+		return nil, status.Errorf(codes.InvalidArgument, "devicePath %q does not exist or is not a directory", devicePath)
+	}
+
+	// Create the staging path
 	if err := os.MkdirAll(stagingTargetPath, 0755); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create staging target path: %v", err)
 	}
 
+	// Perform the bind mount
 	if err := unix.Mount(devicePath, stagingTargetPath, "", unix.MS_BIND, ""); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to bind mount devicePath to staging: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to bind mount devicePath (%s) to staging (%s): %v", devicePath, stagingTargetPath, err)
 	}
 
+	logrus.Infof("NodeStageVolume: Mounted %s to %s", devicePath, stagingTargetPath)
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
