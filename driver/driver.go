@@ -203,13 +203,12 @@ func (ns *nodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoReque
 }
 
 func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
-	target := req.GetTargetPath()
-	volID := req.GetVolumeId()
-	src := fmt.Sprintf("/mnt/data/%s", volID)
+	staging := req.GetStagingTargetPath()
+	target := req.GetTargetPath() // pod /data
 
-	// Create the source path if it doesn't exist
-	if err := os.MkdirAll(src, 0755); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create source path %s: %v", src, err)
+	//Validate
+	if staging == "" {
+		return nil, status.Error(codes.InvalidArgument, "stagingTargetPath is required")
 	}
 
 	// Create the target path (where kubelet wants to mount)
@@ -218,11 +217,11 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	}
 
 	// Perform the bind mount
-	if err := unix.Mount(src, target, "", unix.MS_BIND, ""); err != nil {
+	if err := unix.Mount(staging, target, "", unix.MS_BIND, ""); err != nil {
 		return nil, status.Errorf(codes.Internal, "bind mount failed: %v", err)
 	}
 
-	logrus.Infof("Mounted %s to %s", src, target)
+	logrus.Infof("NodePublishVolume: Mounted %s to %s", staging, target)
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
@@ -249,35 +248,32 @@ func (ns *nodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetC
 	}, nil
 }
 
-func (ns *nodeServer) NodeStageVolume(
-	ctx context.Context,
-	req *csi.NodeStageVolumeRequest,
-) (*csi.NodeStageVolumeResponse, error) {
+func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 
-	devicePath := req.GetPublishContext()["devicePath"]
+	devicePath := req.GetPublishContext()["devicePath"] // /mnt/data/pvc-50e7a998-5559-447f-af1f-eba501ded56d/
 	stagingTargetPath := req.GetStagingTargetPath()
 
 	if devicePath == "" {
+		logrus.Infof("NodeStageVolume: devicePath not provided in publish context, using volume context")
 		devicePath = req.GetVolumeContext()["path"]
 		//return nil, status.Error(codes.InvalidArgument, "devicePath missing in publish context")
 	}
-
+	logrus.Infof("NodeStageVolume: devicePath=%s, stagingTargetPath=%s", devicePath, stagingTargetPath)
 	// Validate that devicePath exists
 	if stat, err := os.Stat(devicePath); err != nil || !stat.IsDir() {
 		return nil, status.Errorf(codes.InvalidArgument, "devicePath %q does not exist or is not a directory", devicePath)
 	}
-
+	logrus.Infof("NodeStageVolume: devicePath %s is valid", devicePath)
 	// Create the staging path
 	if err := os.MkdirAll(stagingTargetPath, 0755); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create staging target path: %v", err)
 	}
-
+	logrus.Infof("NodeStageVolume: Created staging target path %s", stagingTargetPath)
 	// Perform the bind mount
 	if err := unix.Mount(devicePath, stagingTargetPath, "", unix.MS_BIND, ""); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to bind mount devicePath (%s) to staging (%s): %v", devicePath, stagingTargetPath, err)
 	}
-
-	logrus.Infof("NodeStageVolume: Mounted %s to %s", devicePath, stagingTargetPath)
+	logrus.Infof("NodeStageVolume: Successfully bind mounted %s to %s", devicePath, stagingTargetPath)
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
