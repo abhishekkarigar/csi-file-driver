@@ -152,14 +152,23 @@ func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 }
 
 // ControllerPublishVolume provides the local directory path for the volume.
-func (cs *controllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
-	logrus.Infof("ControllerPublishVolume called with VolumeID=%s, NodeID=%s", req.VolumeId, req.NodeId)
+func (cs *controllerServer) ControllerPublishVolume(
+	ctx context.Context,
+	req *csi.ControllerPublishVolumeRequest,
+) (*csi.ControllerPublishVolumeResponse, error) {
 
-	// For file storage, there's often nothing to attach. But we can return metadata if needed.
+	volumeID := req.GetVolumeId()
+	if volumeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "Volume ID missing")
+	}
+
+	// For file-based volumes, we can return a dummy devicePath
+	publishContext := map[string]string{
+		"devicePath": fmt.Sprintf("/mnt/data/%s", volumeID), // pseudo path for file-based volume
+	}
+
 	return &csi.ControllerPublishVolumeResponse{
-		PublishContext: map[string]string{
-			"devicePath": fmt.Sprintf("/mnt/data/%s", req.VolumeId),
-		},
+		PublishContext: publishContext,
 	}, nil
 }
 
@@ -233,29 +242,22 @@ func (ns *nodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetC
 	}, nil
 }
 
-func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
-	volumeID := req.GetVolumeId()
-	stagePath := req.GetStagingTargetPath()
+func (ns *nodeServer) NodeStageVolume(
+	ctx context.Context,
+	req *csi.NodeStageVolumeRequest,
+) (*csi.NodeStageVolumeResponse, error) {
 
-	logrus.Infof("NodeStageVolume: volumeID=%s, stagingPath=%s", volumeID, stagePath)
+	devicePath := req.GetPublishContext()["devicePath"]
+	stagingTargetPath := req.GetStagingTargetPath()
 
-	// Get source path from ControllerPublishVolume (e.g., from PublishContext)
-	src, ok := req.PublishContext["devicePath"]
-	if !ok {
-		return nil, status.Error(codes.InvalidArgument, "devicePath missing in publish context")
+	if err := os.MkdirAll(stagingTargetPath, 0755); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create staging target path: %v", err)
 	}
 
-	// Create the staging target path if it doesn't exist
-	if err := os.MkdirAll(stagePath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create stage path %s: %v", stagePath, err)
+	if err := unix.Mount(devicePath, stagingTargetPath, "", unix.MS_BIND, ""); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to bind mount devicePath to staging: %v", err)
 	}
 
-	// Mount the source to the staging target path (bind mount)
-	if err := unix.Mount(src, stagePath, "", unix.MS_BIND, ""); err != nil {
-		return nil, status.Errorf(codes.Internal, "bind mount failed: %v", err)
-	}
-
-	logrus.Infof("Successfully staged volume %s at %s", volumeID, stagePath)
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
