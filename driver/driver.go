@@ -258,7 +258,8 @@ func (ns *nodeServer) NodeStageVolume(
 	stagingTargetPath := req.GetStagingTargetPath()
 
 	if devicePath == "" {
-		return nil, status.Error(codes.InvalidArgument, "devicePath missing in publish context")
+		devicePath = req.GetVolumeContext()["path"]
+		//return nil, status.Error(codes.InvalidArgument, "devicePath missing in publish context")
 	}
 
 	// Validate that devicePath exists
